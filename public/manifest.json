@@ -1,23 +1,22 @@
 {
   "manifest_version": 3,
   "name": "Job Application Helper",
-  "version": "0.1.0",
-  "description": "Upload your resume once, then auto-fill common job application fields + EEO questions.",
+  "version": "0.4.0",
+  "description": "Upload your resume once, then auto-fill job application fields + EEO/H1B sections. Includes Field Mapper + Learn-from-page + Global rules + Floating Window.",
   "action": {
     "default_title": "Job Application Helper",
     "default_popup": "popup.html"
   },
-  "permissions": ["storage", "activeTab", "scripting"],
+   "background": {
+    "service_worker": "service-worker.js"
+  },
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "windows","webNavigation"],
   "host_permissions": [
     "http://*/*",
     "https://*/*",
     "https://job-boards.greenhouse.io/*",
     "https://*.greenhouse.io/*"
   ],
-  "background": {
-    "service_worker": "service-worker.js",
-    "type": "module"
-  },
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],

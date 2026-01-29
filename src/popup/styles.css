@@ -6,24 +6,36 @@
   --border: rgba(231, 238, 247, 0.14);
   --btn: rgba(231, 238, 247, 0.12);
   --btn2: rgba(34, 197, 94, 0.18);
+  width: 100%;
+  box-sizing: border-box
 }
 
 * {
   box-sizing: border-box;
 }
 
+/* Popup size */
 html,
 body {
+  width: 720px;      /* try 700–900px */
+  min-width: 720px;
+  max-width: 900px;
+  height: auto;
   margin: 0;
   padding: 0;
   background: var(--bg);
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial,
     "Apple Color Emoji", "Segoe UI Emoji";
+
+  /* ✅ NEW: allow scrolling in Chrome action popup */
+  overflow: auto;
+
 }
 
 .wrap {
-  width: 380px;
+  width: 100%;
+  max-width: 560px;
   padding: 12px;
 }
 
@@ -124,6 +136,10 @@ body {
   display: flex;
   gap: 10px;
   margin-top: 10px;
+
+  /* ✅ NEW: prevents buttons from being cut off in small popup */
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .btn,
@@ -247,4 +263,36 @@ body {
   border-radius: 14px;
   padding: 10px;
   background: rgba(255, 255, 255, 0.02);
+}
+
+/* keep your existing CSS, add this at the bottom */
+
+.pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  color: rgba(231, 238, 247, 0.92);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(231, 238, 247, 0.14);
+  border-radius: 14px;
+  padding: 10px;
+}
+
+/* ✅ NEW: mobile/small popup responsiveness */
+@media (max-width: 520px) {
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+  .wrap {
+    max-width: 100%;
+  }
+}
+
+/* ✅ NEW: avoid cutting off long selectors/urls in mapping rows */
+.mappingRow .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
 }

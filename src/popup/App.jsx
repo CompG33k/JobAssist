@@ -66,10 +66,25 @@ function makeId() {
   return `r_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
 }
 
+function isWindowMode() {
+  try {
+    const u = new URL(window.location.href);
+    return u.searchParams.get("mode") === "window";
+  } catch {
+    return false;
+  }
+}
+
+function hasChromeRuntime() {
+  return typeof chrome !== "undefined" && !!chrome?.runtime?.id && !!chrome?.runtime?.sendMessage;
+}
+
 export default function App() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [resumeText, setResumeText] = useState("");
+  const [appVersion, setAppVersion] = useState("");
+  const [buildCount, setBuildCount] = useState(null);
 
   const [profile, setProfile] = useState({
     fullName: "",
@@ -100,7 +115,7 @@ export default function App() {
   const [mapToKey, setMapToKey] = useState("email");
   const [domainMappings, setDomainMappings] = useState({});
 
-  // Dynamic rules state
+  // Dynamic rules state (per-site)
   const [domainRules, setDomainRules] = useState([]);
   const [ruleMatchText, setRuleMatchText] = useState("sexual orientation");
   const [ruleSource, setRuleSource] = useState("pref"); // "pref" | "literal"
@@ -109,29 +124,82 @@ export default function App() {
 
   const [lastReport, setLastReport] = useState(null);
 
+  // keep-open window mode support
+  const [windowMode] = useState(isWindowMode);
+
+  // ✅ FIX: mapper requires floating window (your previous code used undefined isFloating)
+  const isFloating = windowMode;
+
+  async function safeSendMessage(payload) {
+    if (!hasChromeRuntime()) {
+      throw new Error("Chrome extension runtime not available (are you opening this outside the extension popup/window?)");
+    }
+    return await chrome.runtime.sendMessage(payload);
+  }
+  useEffect(() => {
+  async function refreshFromStorage() {
+    try {
+      const s = await storageGet(["resumeText", "profile", "prefs"]);
+      if (s.resumeText !== undefined) setResumeText(s.resumeText || "");
+      if (s.profile !== undefined) setProfile(s.profile || {});
+      if (s.prefs !== undefined) setPrefs((prev) => ({ ...prev, ...(s.prefs || {}) }));
+    } catch {
+      // ignore
+    }
+  }
+
+  window.addEventListener("focus", refreshFromStorage);
+  return () => window.removeEventListener("focus", refreshFromStorage);
+}, []);
+
+// Keep popup + floating window in sync (both read/write chrome.storage.local)
+useEffect(() => {
+  function onChanged(changes, area) {
+    if (area !== "local") return;
+
+    // If another window saved something, mirror it here
+    if (changes.resumeText?.newValue !== undefined) {
+      setResumeText(changes.resumeText.newValue || "");
+    }
+    if (changes.profile?.newValue !== undefined) {
+      setProfile(changes.profile.newValue || {});
+    }
+    if (changes.prefs?.newValue !== undefined) {
+      setPrefs((prev) => ({ ...prev, ...(changes.prefs.newValue || {}) }));
+    }
+  }
+
+  chrome.storage.onChanged.addListener(onChanged);
+  return () => chrome.storage.onChanged.removeListener(onChanged);
+}, []);
+
   useEffect(() => {
     (async () => {
-      const saved = await storageGet(["resumeText", "profile", "prefs"]);
-      if (saved.resumeText) setResumeText(saved.resumeText);
-      if (saved.profile) setProfile(saved.profile);
-      if (saved.prefs) setPrefs({ ...DEFAULT_PREFS, ...saved.prefs });
+      try {
+        const saved = await storageGet(["resumeText", "profile", "prefs"]);
+        if (saved.resumeText) setResumeText(saved.resumeText);
+        if (saved.profile) setProfile(saved.profile);
+        if (saved.prefs) setPrefs({ ...DEFAULT_PREFS, ...saved.prefs });
 
-      await refreshActiveTabInfo();
+        await refreshActiveTabInfo();
+      } catch (e) {
+        setStatus(e?.message || String(e));
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Listen for mapper selection events
   useEffect(() => {
+    if (!hasChromeRuntime() || !chrome?.runtime?.onMessage?.addListener) return;
+
     function onMsg(msg) {
       if (!msg || !msg.type) return;
 
       if (msg.type === "JAH_MAPPER_FIELD_SELECTED") {
         const payload = msg.payload || {};
         setSelectedField(payload);
-        setStatus(
-          `Field selected on ${payload.hostname}. Choose “Map to” then Save mapping.`
-        );
+        setStatus(`Field selected on ${payload.hostname}. Choose “Map to” then Save mapping.`);
       }
 
       if (msg.type === "JAH_MAPPER_CANCELLED") {
@@ -143,6 +211,49 @@ export default function App() {
     chrome.runtime.onMessage.addListener(onMsg);
     return () => chrome.runtime.onMessage.removeListener(onMsg);
   }, []);
+
+  useEffect(() => {
+    // Reads version from manifest.json (always correct)
+    try {
+      if (hasChromeRuntime() && chrome.runtime.getManifest) {
+        const mv = chrome.runtime.getManifest();
+        setAppVersion(mv?.version || "");
+      } else {
+        setAppVersion("");
+      }
+    } catch {
+      setAppVersion("");
+    }
+
+    // Reads local build counter
+    (async () => {
+      const saved = await storageGet(["buildCount"]);
+      const n = typeof saved.buildCount === "number" ? saved.buildCount : 0;
+      setBuildCount(n);
+    })();
+  }, []);
+
+  // persist floating window size for next time
+  useEffect(() => {
+    if (!windowMode) return;
+
+    let t = null;
+    const onResize = () => {
+      if (t) clearTimeout(t);
+      t = setTimeout(async () => {
+        try {
+          await storageSet({
+            floatingSize: { width: window.outerWidth, height: window.outerHeight }
+          });
+        } catch {
+          // ignore
+        }
+      }, 300);
+    };
+
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [windowMode]);
 
   const completeness = useMemo(() => {
     const keys = [
@@ -164,9 +275,9 @@ export default function App() {
 
   async function refreshActiveTabInfo() {
     try {
-      const res = await chrome.runtime.sendMessage({
-        type: "JAH_GET_ACTIVE_TAB_INFO"
-      });
+      if (!hasChromeRuntime()) return;
+
+      const res = await safeSendMessage({ type: "JAH_GET_ACTIVE_TAB_INFO" });
       if (!res?.ok) return;
 
       setHostname(res.hostname || "");
@@ -180,6 +291,35 @@ export default function App() {
       }
     } catch {
       // ignore
+    }
+  }
+
+  // open keep-open floating window
+  async function openFloatingWindow() {
+    try {
+      const saved = await storageGet(["floatingSize"]);
+      const w = saved?.floatingSize?.width || 480;
+      const h = saved?.floatingSize?.height || 760;
+
+      const res = await safeSendMessage({
+        type: "JAH_OPEN_FLOATING_WINDOW",
+        width: w,
+        height: h
+      });
+
+      if (!res?.ok) {
+        setStatus(res?.error || "Failed to open floating window.");
+      } else {
+        setStatus(res.reused ? "Focused floating window." : "Opened floating window (stays open).");
+
+        // Optional: close any open dropdown/focus before closing popup
+        document.activeElement?.blur?.();
+
+        // Optional: if we're currently the popup (not the floating window), close it
+        if (!windowMode) window.close();
+      }
+    } catch (e) {
+      setStatus(`Window error: ${e?.message || String(e)}`);
     }
   }
 
@@ -197,11 +337,13 @@ export default function App() {
       setStatus("Parsing key info…");
       const nextProfile = parseResumeToProfile(text);
 
-      setProfile((prev) => ({ ...prev, ...nextProfile }));
+      // keep React state consistent + persist the same merged profile
+      const merged = { ...profile, ...nextProfile };
+      setProfile(merged);
 
       await storageSet({
         resumeText: text,
-        profile: { ...profile, ...nextProfile }
+        profile: merged
       });
 
       setStatus("Saved. You can now auto-fill on a job application page.");
@@ -217,6 +359,7 @@ export default function App() {
     setBusy(true);
     try {
       await storageSet({ resumeText, profile, prefs });
+      await bumpBuildCounter();
       setStatus("Saved settings.");
     } catch (err) {
       setStatus(`Save failed: ${err?.message || String(err)}`);
@@ -226,12 +369,17 @@ export default function App() {
   }
 
   async function toggleMapper() {
+    if (!isFloating) {
+      setStatus("Mapper requires Floating Window. Click ‘Open Floating Window’ first.");
+      return;
+    }
+
     setBusy(true);
     try {
       await refreshActiveTabInfo();
 
       if (!mapperOn) {
-        const res = await chrome.runtime.sendMessage({ type: "JAH_START_MAPPER" });
+        const res = await safeSendMessage({ type: "JAH_START_MAPPER" });
         if (!res?.ok) {
           setStatus(res?.error || "Failed to start mapper.");
         } else {
@@ -240,7 +388,7 @@ export default function App() {
           setStatus("Mapper ON: click a field on the page (press Esc to cancel).");
         }
       } else {
-        await chrome.runtime.sendMessage({ type: "JAH_STOP_MAPPER" });
+        await safeSendMessage({ type: "JAH_STOP_MAPPER" });
         setMapperOn(false);
         setStatus("Mapper OFF.");
       }
@@ -398,9 +546,11 @@ export default function App() {
     try {
       let current = Array.isArray(domainRules) ? [...domainRules] : [];
       for (const r of common) {
-        // avoid duplicates by matchText+prefKey
         const exists = current.some(
-          (x) => norm(x.matchText) === norm(r.matchText) && x.prefKey === r.prefKey && x.source === r.source
+          (x) =>
+            norm(x.matchText) === norm(r.matchText) &&
+            x.prefKey === r.prefKey &&
+            x.source === r.source
         );
         if (exists) continue;
         current = await saveDomainCustomRule(hostname, r);
@@ -409,6 +559,22 @@ export default function App() {
       setStatus("Added common dynamic rules (you can delete any you don’t want).");
     } catch (err) {
       setStatus(`Quick add failed: ${err?.message || String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bumpBuildCounter() {
+    setBusy(true);
+    try {
+      const saved = await storageGet(["buildCount"]);
+      const n = typeof saved.buildCount === "number" ? saved.buildCount : 0;
+      const next = n + 1;
+      await storageSet({ buildCount: next });
+      setBuildCount(next);
+      setStatus(`Build counter bumped to ${next}`);
+    } catch (e) {
+      setStatus(`Build counter error: ${e?.message || String(e)}`);
     } finally {
       setBusy(false);
     }
@@ -423,7 +589,7 @@ export default function App() {
       await refreshActiveTabInfo();
       await storageSet({ resumeText, profile, prefs });
 
-      const res = await chrome.runtime.sendMessage({
+      const res = await safeSendMessage({
         type: "JAH_APPLY_FILL",
         payload: {
           profile,
@@ -461,7 +627,9 @@ export default function App() {
   );
 
   const ruleEntries = Array.isArray(domainRules) ? domainRules.slice() : [];
-  ruleEntries.sort((a, b) => String(a.matchText || "").localeCompare(String(b.matchText || "")));
+  ruleEntries.sort((a, b) =>
+    String(a.matchText || "").localeCompare(String(b.matchText || ""))
+  );
 
   const fieldKeyOptions = FIELD_KEYS.map((x) => x.key);
   const fieldKeyLabels = Object.fromEntries(FIELD_KEYS.map((x) => [x.key, x.label]));
@@ -469,23 +637,46 @@ export default function App() {
   return (
     <div className="wrap">
       <header className="header">
-        <div className="title">Job Application Helper</div>
-        <div className="sub">Upload resume → save → open a job form → Auto-fill</div>
+        <div className="title">
+          Job Application Helper{" "}
+          {windowMode ? <span className="pill ok">Window</span> : null}
+        </div>
+
+        <div className="sub">
+          Version: <b>{appVersion || "—"}</b> • Builds: <b>{buildCount ?? "—"}</b>
+          <br />
+          Upload resume → save → open a job form → Auto-fill
+          <br />
+          Popup auto-closes — use Floating Window to keep it open.
+        </div>
       </header>
 
+      {/* Floating Window controls */}
       <section className="card">
-        <div className="row">
-          <label className="label">Active tab</label>
-          <div className="small">
-            Domain: <b>{hostname || "—"}</b>
-            <br />
-            <span className="mono">{activeUrl ? activeUrl.slice(0, 68) : "—"}</span>
-          </div>
-          <div className="btnRow">
-            <button className="btn" onClick={refreshActiveTabInfo} disabled={busy}>
-              Refresh tab info
+        <div className="btnRow">
+          {!windowMode ? (
+            <button className="btnPrimary" onClick={openFloatingWindow} disabled={busy}>
+              Open Floating Window
             </button>
-          </div>
+          ) : (
+            <button className="btnPrimary" onClick={() => window.close()} disabled={busy}>
+              Close Window
+            </button>
+          )}
+
+          <button className="btn" onClick={refreshActiveTabInfo} disabled={busy}>
+            Refresh tab info
+          </button>
+
+          <button className="btn" onClick={bumpBuildCounter} disabled={busy}>
+            Bump Build #
+          </button>
+        </div>
+
+        <div className="small" style={{ marginTop: 10 }}>
+          Domain: <b>{hostname || "—"}</b>
+          <br />
+          <span className="mono">{activeUrl ? activeUrl.slice(0, 68) : "—"}</span>
         </div>
       </section>
 

@@ -11,8 +11,8 @@
   "dependencies": {
     "mammoth": "^1.8.0",
     "pdfjs-dist": "^4.6.82",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.7.0",
