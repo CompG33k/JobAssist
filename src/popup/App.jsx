@@ -121,6 +121,9 @@ export default function App() {
   const [ruleSource, setRuleSource] = useState("pref"); // "pref" | "literal"
   const [rulePrefKey, setRulePrefKey] = useState("sexualOrientation");
   const [ruleLiteralValue, setRuleLiteralValue] = useState("Prefer not to say");
+  // Quick-add controls for common rules
+  const [quickAddMode, setQuickAddMode] = useState("pref"); // "pref" | "literal"
+  const [quickAddLiteralValue, setQuickAddLiteralValue] = useState("Prefer not to say");
 
   const [lastReport, setLastReport] = useState(null);
 
@@ -559,29 +562,36 @@ useEffect(() => {
       return;
     }
 
-    const common = [
-      { matchText: "sexual orientation", source: "pref", prefKey: "sexualOrientation" },
-      { matchText: "marital status", source: "pref", prefKey: "maritalStatus" },
-      { matchText: "hispanic", source: "pref", prefKey: "hispanicLatino" },
-      { matchText: "latino", source: "pref", prefKey: "hispanicLatino" },
-      { matchText: "gender", source: "pref", prefKey: "gender" },
-      { matchText: "sex", source: "pref", prefKey: "sex" },
-      { matchText: "disability", source: "pref", prefKey: "disability" },
-      { matchText: "veteran", source: "pref", prefKey: "veteran" },
-      { matchText: "h1b", source: "pref", prefKey: "h1b" },
-      { matchText: "h-1b", source: "pref", prefKey: "h1b" }
-    ].map((r) => ({ ...r, id: makeId() }));
+    const commonBase = [
+      { matchText: "sexual orientation", prefKey: "sexualOrientation" },
+      { matchText: "marital status", prefKey: "maritalStatus" },
+      { matchText: "hispanic", prefKey: "hispanicLatino" },
+      { matchText: "latino", prefKey: "hispanicLatino" },
+      { matchText: "gender", prefKey: "gender" },
+      { matchText: "sex", prefKey: "sex" },
+      { matchText: "disability", prefKey: "disability" },
+      { matchText: "veteran", prefKey: "veteran" },
+      { matchText: "h1b", prefKey: "h1b" },
+      { matchText: "h-1b", prefKey: "h1b" }
+    ];
+
+    const common = commonBase.map((r) => {
+      const id = makeId();
+      if (quickAddMode === "pref") {
+        return { id, matchText: r.matchText, source: "pref", prefKey: r.prefKey };
+      }
+      return { id, matchText: r.matchText, source: "literal", value: quickAddLiteralValue };
+    });
 
     setBusy(true);
     try {
       let current = Array.isArray(domainRules) ? [...domainRules] : [];
       for (const r of common) {
-        const exists = current.some(
-          (x) =>
-            norm(x.matchText) === norm(r.matchText) &&
-            x.prefKey === r.prefKey &&
-            x.source === r.source
-        );
+        const exists = current.some((x) => {
+          if (norm(x.matchText) !== norm(r.matchText)) return false;
+          if (r.source === "pref") return x.source === "pref" && x.prefKey === r.prefKey;
+          return x.source === "literal" && String(x.value || "") === String(r.value || "");
+        });
         if (exists) continue;
         current = await saveDomainCustomRule(hostname, r);
       }
@@ -824,13 +834,43 @@ useEffect(() => {
           Works on inputs, selects, and many radio groups.
         </div>
 
-        <div className="btnRow">
-          <button className="btn" onClick={quickAddCommonRules} disabled={busy || !hostname}>
-            Quick add common rules
-          </button>
-          <button className="btn" onClick={clearRules} disabled={busy || !hostname}>
-            Clear domain rules
-          </button>
+        <div className="grid2" style={{ alignItems: "end" }}>
+          <SelectField
+            label="Quick add answer"
+            value={quickAddMode}
+            onChange={(v) => setQuickAddMode(v)}
+            options={["pref", "literal"]}
+            optionLabels={{ pref: "Use Preference", literal: "Use Literal" }}
+          />
+
+          {quickAddMode === "literal" ? (
+            <SelectField
+              label="Literal value"
+              value={quickAddLiteralValue}
+              onChange={(v) => setQuickAddLiteralValue(v)}
+              options={[
+                "Prefer not to say",
+                "Decline to self-identify",
+                "I don't wish to answer",
+                "Yes",
+                "No",
+                "Heterosexual / Straight",
+                "Gay or Lesbian",
+                "Bisexual"
+              ]}
+            />
+          ) : (
+            <div />
+          )}
+
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button className="btn" onClick={quickAddCommonRules} disabled={busy || !hostname}>
+              Quick add common rules
+            </button>
+            <button className="btn" onClick={clearRules} disabled={busy || !hostname}>
+              Clear domain rules
+            </button>
+          </div>
         </div>
 
         <div className="divider" />

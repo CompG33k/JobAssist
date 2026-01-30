@@ -107,12 +107,87 @@ function selectOptionByBestMatch(selectEl, desired) {
   }
 
   if (bestIdx >= 0 && bestScore > 0) {
+    // keep the original synchronous setter for backwards compatibility
     selectEl.selectedIndex = bestIdx;
     selectEl.dispatchEvent(new Event("input", { bubbles: true }));
     selectEl.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
   }
   return false;
+}
+
+function selectOptionIndexByBestMatch(selectEl, desired) {
+  const desiredNorm = normKey(desired);
+  const options = Array.from(selectEl.options || []);
+  if (!options.length) return -1;
+
+  let bestIdx = -1;
+  let bestScore = -1;
+
+  for (let i = 0; i < options.length; i++) {
+    const opt = options[i];
+    const txt = normKey(opt.textContent || opt.label || opt.value || "");
+    if (!txt) continue;
+
+    let score = 0;
+    if (txt === desiredNorm) score += 1000;
+    if (txt.includes(desiredNorm) || desiredNorm.includes(txt)) score += 200;
+
+    const a = new Set(txt.split(" ").filter(Boolean));
+    const b = new Set(desiredNorm.split(" ").filter(Boolean));
+    let overlap = 0;
+    for (const w of a) if (b.has(w)) overlap++;
+    score += overlap * 25;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+
+  if (bestIdx >= 0 && bestScore > 0) return bestIdx;
+  return -1;
+}
+
+function sleep(ms) {
+  return new Promise((res) => setTimeout(res, ms));
+}
+
+function rand(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function humanSelectOption(selectEl, desired) {
+  // Try to find best matching option index
+  const idx = selectOptionIndexByBestMatch(selectEl, desired);
+  if (idx < 0) return false;
+
+  try {
+    // Focus and simulate user opening the select
+    selectEl.focus();
+    selectEl.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    selectEl.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    selectEl.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    selectEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    // Wait a human-like delay for dropdown to open
+    await sleep(rand(300, 900));
+
+    // Set the selection (native <select> options are not clickable in DOM in many browsers,
+    // so set selectedIndex and emit events, but after a pause to mimic a human choosing)
+    selectEl.selectedIndex = idx;
+    // small delay to mimic user deliberation
+    await sleep(rand(200, 600));
+    selectEl.dispatchEvent(new Event("input", { bubbles: true }));
+    selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Wait for any page JS to react
+    await sleep(rand(200, 700));
+
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 function highlightEls(elements, color) {
@@ -524,7 +599,7 @@ function fillTextLike(el, value) {
   return { changed: true, reason: "filled" };
 }
 
-function fillSelect(el, desired) {
+async function fillSelect(el, desired) {
   if (!desired) return { changed: false, reason: "empty-desired" };
   if (!isVisible(el)) return { changed: false, reason: "not-visible" };
 
@@ -540,7 +615,8 @@ function fillSelect(el, desired) {
 
   if (!looksPlaceholder) return { changed: false, reason: "already-selected" };
 
-  const changed = selectOptionByBestMatch(el, desired);
+  // Attempt a human-like selection first
+  const changed = await humanSelectOption(el, desired);
   return { changed, reason: changed ? "selected" : "no-match" };
 }
 
@@ -561,7 +637,7 @@ function highlightFilled(elements) {
   return elements.length;
 }
 
-function applyMappingsFirst(mappings, valueMap) {
+async function applyMappingsFirst(mappings, valueMap) {
   const filledEls = [];
   const report = [];
 
@@ -596,8 +672,10 @@ function applyMappingsFirst(mappings, valueMap) {
     const tag = el.tagName.toLowerCase();
     let changed = false;
 
-    if (tag === "select") changed = fillSelect(el, val).changed;
-    else if (tag === "input" || tag === "textarea") changed = fillTextLike(el, val).changed;
+    if (tag === "select") {
+      const res = await fillSelect(el, val);
+      changed = res.changed;
+    } else if (tag === "input" || tag === "textarea") changed = fillTextLike(el, val).changed;
     else if (el.getAttribute("contenteditable") === "true") {
       if (!el.textContent.trim()) {
         el.textContent = val;
@@ -626,7 +704,7 @@ function resolveRuleAnswer(rule, valueMap) {
  * Dynamic Q/A rules:
  * If hints contains rule.matchText, fill field with answer (literal or preference-backed).
  */
-function applyCustomRules(customRules, valueMap) {
+async function applyCustomRules(customRules, valueMap) {
   const rules = Array.isArray(customRules) ? customRules : [];
   if (!rules.length) return { filledEls: [], report: [] };
 
@@ -683,8 +761,8 @@ function applyCustomRules(customRules, valueMap) {
         report.push({ ruleId: rule.id, matched: rule.matchText, kind: "select", changed: false, why: "no-answer" });
         continue;
       }
-
-      const res = fillSelect(el, answer);
+      // await human-like select
+      const res = await fillSelect(el, answer);
       report.push({
         ruleId: rule.id,
         matched: rule.matchText,
@@ -737,7 +815,7 @@ function applyCustomRules(customRules, valueMap) {
   return { filledEls, report };
 }
 
-function runFill(payload) {
+async function runFill(payload) {
   const profile = payload?.profile || {};
   const prefs = payload?.prefs || {};
   const mappings = payload?.mappings || {};
@@ -762,12 +840,12 @@ function runFill(payload) {
   const filledEls = [];
 
   // 1) Apply per-domain mappings first
-  const mapped = applyMappingsFirst(mappings, valueMap);
+  const mapped = await applyMappingsFirst(mappings, valueMap);
   report.mapped = mapped.report;
   filledEls.push(...mapped.filledEls);
 
   // 2) Apply dynamic Q/A rules (per-domain)
-  const dyn = applyCustomRules(customRules, valueMap);
+  const dyn = await applyCustomRules(customRules, valueMap);
   report.dynamicRules = dyn.report;
   filledEls.push(...dyn.filledEls);
 
@@ -799,7 +877,7 @@ function runFill(payload) {
     if (mappings && mappings[key] && mappings[key].selector) continue;
 
     const desired = valueMap[key];
-    const r = fillSelect(el, desired);
+    const r = await fillSelect(el, desired);
 
     report.selects.push({
       key,
@@ -839,9 +917,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "JAH_FILL_FORM") {
-      const result = runFill(msg.payload || {});
-      sendResponse(result);
-      return;
+        // runFill is async because select handling may include human-like delays.
+        runFill(msg.payload || {})
+          .then((result) => sendResponse(result))
+          .catch((e) => sendResponse({ ok: false, error: e?.message || String(e) }));
+        return true; // indicate we'll send response asynchronously
     }
   } catch (e) {
     sendResponse({ ok: false, error: e?.message || String(e) });
