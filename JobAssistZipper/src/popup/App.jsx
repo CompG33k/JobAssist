@@ -130,10 +130,6 @@ export default function App() {
   // ✅ FIX: mapper requires floating window (your previous code used undefined isFloating)
   const isFloating = windowMode;
 
-  // When starting mapper from the dropdown popup, the popup closes as soon as you
-  // click the target page. So we "handoff" to the floating window and auto-start there.
-  const AUTO_START_MAPPER_KEY = "jah_autoStartMapper";
-
   async function safeSendMessage(payload) {
     if (!hasChromeRuntime()) {
       throw new Error("Chrome extension runtime not available (are you opening this outside the extension popup/window?)");
@@ -192,29 +188,6 @@ useEffect(() => {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Auto-start mapper in the floating window when the dropdown popup triggered it.
-  useEffect(() => {
-    if (!windowMode) return;
-
-    (async () => {
-      try {
-        const s = await storageGet([AUTO_START_MAPPER_KEY]);
-        if (!s?.[AUTO_START_MAPPER_KEY]) return;
-
-        // Clear first so refreshes don't re-trigger.
-        await storageSet({ [AUTO_START_MAPPER_KEY]: false });
-
-        setBusy(true);
-        await startMapperHere();
-      } catch (e) {
-        setStatus(`Mapper error: ${e?.message || String(e)}`);
-      } finally {
-        setBusy(false);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [windowMode]);
 
   // Listen for mapper selection events
   useEffect(() => {
@@ -334,29 +307,20 @@ useEffect(() => {
         height: h
       });
 
-  //    if (!res?.ok) {
-//        setStatus(res?.error || "Failed to open floating window.");
-    //  } else {
+      if (!res?.ok) {
+        setStatus(res?.error || "Failed to open floating window.");
+      } else {
         setStatus(res.reused ? "Focused floating window." : "Opened floating window (stays open).");
 
         // Optional: close any open dropdown/focus before closing popup
-        //document.activeElement?.blur?.();
+        document.activeElement?.blur?.();
 
         // Optional: if we're currently the popup (not the floating window), close it
         if (!windowMode) window.close();
-      //}
+      }
     } catch (e) {
       setStatus(`Window error: ${e?.message || String(e)}`);
     }
-  }
-
-  async function startMapperHere() {
-    await refreshActiveTabInfo();
-    const res = await safeSendMessage({ type: "JAH_START_MAPPER" });
-    if (!res?.ok) throw new Error(res?.error || "Failed to start mapper.");
-    setMapperOn(true);
-    setSelectedField(null);
-    setStatus("Mapper ON: click a field on the page (press Esc to cancel).");
   }
 
   async function onUpload(e) {
@@ -405,30 +369,36 @@ useEffect(() => {
   }
 
   async function toggleMapper() {
-  setBusy(true);
-  try {
-    await refreshActiveTabInfo();
-
-    if (!mapperOn) {
-      const res = await safeSendMessage({ type: "JAH_START_MAPPER" });
-      if (!res?.ok) {
-        setStatus(res?.error || "Failed to start mapper.");
-      } else {
-        setMapperOn(true);
-        setSelectedField(null);
-        setStatus("Mapper ON: click a field on the page (press Esc to cancel).");
-      }
-    } else {
-      await safeSendMessage({ type: "JAH_STOP_MAPPER" });
-      setMapperOn(false);
-      setStatus("Mapper OFF.");
+    if (!isFloating) {
+      setStatus("Mapper requires Floating Window. Click ‘Open Floating Window’ first.");
+      return;
     }
-  } catch (err) {
-    setStatus(`Mapper error: ${err?.message || String(err)}`);
-  } finally {
-    setBusy(false);
+
+    setBusy(true);
+    try {
+      await refreshActiveTabInfo();
+
+      if (!mapperOn) {
+        const res = await safeSendMessage({ type: "JAH_START_MAPPER" });
+        if (!res?.ok) {
+          setStatus(res?.error || "Failed to start mapper.");
+        } else {
+          setMapperOn(true);
+          setSelectedField(null);
+          setStatus("Mapper ON: click a field on the page (press Esc to cancel).");
+        }
+      } else {
+        await safeSendMessage({ type: "JAH_STOP_MAPPER" });
+        setMapperOn(false);
+        setStatus("Mapper OFF.");
+      }
+    } catch (err) {
+      setStatus(`Mapper error: ${err?.message || String(err)}`);
+    } finally {
+      setBusy(false);
+    }
   }
-}
+
   async function saveMappingNow() {
     if (!hostname) {
       setStatus("No hostname detected. Click Refresh tab info, then try again.");

@@ -259,46 +259,40 @@ function startMapper() {
   };
 
   const onClickCapture = (e) => {
-  const target = e.target;
-  if (!isFillableTarget(target)) return;
+    const target = e.target;
+    if (!isFillableTarget(target)) return;
 
-  const tag = (target.tagName || "").toLowerCase();
-
-  // Allow native behavior for <select> elements so their dropdowns can open.
-  // For non-selects, prevent default/page handlers so mapper clicks are clean.
-  if (tag !== "select") {
     e.preventDefault();
     e.stopPropagation();
-  }
 
-  const selector = uniqueSelectorFor(target);
-  const hints = getFieldHints(target);
-  const label = getLabelTextFor(target);
+    const selector = uniqueSelectorFor(target);
+    const hints = getFieldHints(target);
+    const label = getLabelTextFor(target);
 
-  if (JAH.lastMapperCleanup) {
-    try {
-      JAH.lastMapperCleanup();
-    } catch {}
-  }
-  JAH.lastMapperCleanup = highlightEls([target], "#60a5fa");
+    if (JAH.lastMapperCleanup) {
+      try {
+        JAH.lastMapperCleanup();
+      } catch {}
+    }
+    JAH.lastMapperCleanup = highlightEls([target], "#60a5fa");
 
-  const fieldInfo = {
-    hostname: window.location.hostname,
-    selector,
-    tag: target.tagName.toLowerCase(),
-    inputType: (target.getAttribute("type") || "").toLowerCase(),
-    name: target.getAttribute("name") || "",
-    id: target.getAttribute("id") || "",
-    label: label || "",
-    hints: hints || ""
+    const fieldInfo = {
+      hostname: window.location.hostname,
+      selector,
+      tag: target.tagName.toLowerCase(),
+      inputType: (target.getAttribute("type") || "").toLowerCase(),
+      name: target.getAttribute("name") || "",
+      id: target.getAttribute("id") || "",
+      label: label || "",
+      hints: hints || ""
+    };
+
+    chrome.runtime.sendMessage({
+      type: "JAH_MAPPER_FIELD_SELECTED",
+      payload: fieldInfo
+    });
   };
 
-  chrome.runtime.sendMessage({
-    type: "JAH_MAPPER_FIELD_SELECTED",
-    payload: fieldInfo
-  });
-};
-  
   document.addEventListener("click", onClickCapture, true);
   document.addEventListener("keydown", onKeyDown, true);
 
